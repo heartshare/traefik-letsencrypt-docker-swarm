@@ -1,0 +1,99 @@
+# Traefik with Let's Encrypt in a Docker Swarm
+
+# Vladimir Mikhalev
+# callvaldemar@gmail.com
+# www.heyvaldemar.com
+
+# Install the Docker Engine by following the official guide: https://docs.docker.com/engine/install/
+# Install the Docker Swarm by following the official guide: https://docs.docker.com/engine/swarm/swarm-tutorial/create-swarm/
+
+# Create a network for Traefik before deploying the configuration using the command:
+# docker network create -d overlay traefik-network
+
+# Deploy Traefik in a Docker Swarm using the command:
+# docker stack deploy -c traefik-letsencrypt-docker-swarm.yml traefik
+
+version: '3.8'
+
+x-default-opts:
+  &default-opts
+  logging:
+    options:
+      max-size: "10m"
+
+networks:
+  traefik-network:
+    external: true
+
+volumes:
+  traefik-certificates:
+
+services:
+  traefik:
+    <<: *default-opts
+    # Image tag (replace with yours)
+    image: traefik:2.4
+    command:
+      - "--global.checkNewVersion=true"
+      - "--global.sendAnonymousUsage=false"
+      - "--api=true"
+      - "--log.level=WARN"
+      - "--entryPoints.web.address=:80"
+      - "--entryPoints.websecure.address=:443"
+      - "--providers.docker=true"
+      - "--providers.docker.watch=true"
+      - "--providers.docker.swarmMode=true"
+      - "--providers.docker.network=traefik-network"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.swarmModeRefreshSeconds=15s"
+      - "--providers.docker.exposedByDefault=false"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      # Email for Let's Encrypt (replace with yours)
+      - "--certificatesresolvers.letsencrypt.acme.email=callvaldemar@gmail.com"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/etc/traefik/acme/acme.json"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - traefik-certificates:/etc/traefik/acme
+    networks:
+      - traefik-network
+    ports:
+      - "80:80"
+      - "443:443"
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      update_config:
+        delay: 15s
+        parallelism: 1
+        monitor: 10s
+        failure_action: rollback
+        max_failure_ratio: 0.55
+      # Container resources (replace with yours)
+      resources:
+        limits:
+          cpus: '0.35'
+          memory: 256M
+        reservations:
+          cpus: '0.15'
+          memory: 128M
+      labels:
+        - "traefik.enable=true"
+        # Traefik URL (replace with yours)
+        - "traefik.http.routers.default.rule=Host(`traefik.heyvaldemar.net`)"
+        - "traefik.http.routers.default.service=api@internal"
+        - "traefik.http.routers.default.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.default.entrypoints=websecure"
+        - "traefik.http.services.default.loadbalancer.passhostheader=true"
+        - "traefik.http.services.default.loadbalancer.server.port=8080"
+        - "traefik.http.routers.default.middlewares=authtraefik"
+        # Basic Authentication for Traefik Dashboard
+        # Username: traefikadmin (replace with yours)
+        # Passwords must be encoded using MD5, SHA1, or BCrypt
+        - "traefik.http.middlewares.authtraefik.basicauth.users=traefikadmin:$$2y$$10$$sMzJfirKC75x/hVpiINeZOiSm.Jkity9cn4KwNkRvO7hSQVFc5FLO"
+        - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+        - "traefik.http.routers.http-catchall.entrypoints=web"
+        - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+        - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
